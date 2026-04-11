@@ -1,42 +1,12 @@
+## this is a system explanation file  gemini
 
+Row 2 — Frontend: The React chat widget deployed on Vercel. It holds the conversation and sends the full history to your backend on every message.
+Row 3 — Backend: The heart of the system running on Railway. Three things happen here — proxy.js routes the request, Groq generates Lola's reply, and the reservation logic detects RESERVE_TABLE or RESERVE_ROOM tags and acts on them. The system prompt lives here too, invisible to the customer.
+Row 4 — Storage: SQLite saves everything to disk. The admin dashboard reads from those same tables so the restaurant owner sees every booking and room request in real time.
 
+## this is the system context that we passe it to the IA(groq IA)
 
-import express from "express";
-import cors from "cors";
-import Groq from "groq-sdk";
-import dotenv from "dotenv";
-import {
-  checkConflict,
-  createTableReservation,
-  createRoomRequest,
-  getAllTableReservations,
-  getAllRoomRequests,
-} from "./db.js";
-
-dotenv.config();
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-// Find all environment variables starting with GROQ_API_KEY
-const groqKeys = Object.keys(process.env)
-  .filter((key) => key.startsWith("GROQ_API_KEY"))
-  .map((key) => process.env[key])
-  .filter((val) => val); // ensure not empty
-
-if (groqKeys.length === 0) {
-  console.error("❌ No GROQ_API_KEY found in .env file.");
-  process.exit(1);
-}
-
-// Create an array of Groq clients
-const groqClients = groqKeys.map((apiKey) => new Groq({ apiKey }));
-let currentClientIndex = 0;
-
-console.log(`✅ Initialized ${groqClients.length} Groq API key(s) for rotation.`);
-
-const SYSTEM_PROMPT = `You are Lola, a warm, friendly and helpful AI assistant for "L'Alsacien République" — a vibrant Alsatian restaurant and Flammekueche bar located in the 10th arrondissement of Paris.
+SYSTEM_PROMPT = `You are Lola, a warm, friendly and helpful AI assistant for "L'Alsacien République" — a vibrant Alsatian restaurant and Flammekueche bar located in the 10th arrondissement of Paris.
 
 You speak in the same language the customer writes to you. If they write in French, respond in French. If English, respond in English.
 
@@ -184,92 +154,3 @@ YOUR PERSONALITY
 - Never answer questions unrelated to the restaurant (coding, general knowledge, etc.)
 - If asked something off-topic, warmly redirect: "I'm only here to help with L'Alsacien République! Can I help you with our menu or a reservation?"
 `;
-
-app.post("/api/chat", async (req, res) => {
-  try {
-    const { messages } = req.body;
-
-    const filteredMessages = messages.filter((_, index) => {
-      if (index === 0 && messages[0].role === "assistant") return false;
-      return true;
-    });
-
-    let response;
-    let attempts = 0;
-    
-    while (attempts < groqClients.length) {
-      try {
-        response = await groqClients[currentClientIndex].chat.completions.create({
-          model: "llama-3.3-70b-versatile",
-          messages: [
-            { role: "system", content: SYSTEM_PROMPT },
-            ...filteredMessages.map((m) => ({
-              role: m.role === "assistant" ? "assistant" : "user",
-              content: m.content,
-            })),
-          ],
-          max_tokens: 1024,
-        });
-        
-        break; // Success! Exit the retry loop.
-      } catch (e) {
-        // Checking if it's a rate limit (429) or authentication/quota error (401)
-        if (e.status === 429 || e.status === 401 || (e.message && e.message.toLowerCase().includes('rate'))) {
-          console.warn(`⏳ Key index ${currentClientIndex} failed or rate-limited. Rotating...`);
-          currentClientIndex = (currentClientIndex + 1) % groqClients.length;
-          attempts++;
-        } else {
-          // If it's a formatting error or something else, throw immediately
-          throw e;
-        }
-      }
-    }
-
-    if (!response) {
-      throw new Error("Toutes les clés API Groq ont échoué ou dépassé leur limite de requêtes.");
-    }
-
-    let text = response.choices[0].message.content;
-
-    // ✅ Handle TABLE reservation
-    if (text.includes("RESERVE_TABLE:")) {
-      const jsonMatch = text.match(/RESERVE_TABLE:(\{.*?\})/s);
-      if (jsonMatch) {
-        const data = JSON.parse(jsonMatch[1]);
-        const conflict = checkConflict(data.date, data.time, data.party_size);
-
-        if (conflict) {
-          text = `Je suis désolée ${data.first_name}, ce créneau est complet ! 😔 Puis-je vous proposer un autre horaire ?`;
-        } else {
-          const id = createTableReservation(data);
-          const groupNote = data.party_size >= 8
-            ? `\n🍽️ Votre groupe bénéficie de notre **Menu des Copains à 18€/personne** — flammekueches illimitées salées et sucrées !`
-            : "";
-          text = `Parfait ! ✅ Votre réservation est confirmée !\n\n📋 **Réservation #${id}**\n👤 ${data.first_name} ${data.last_name}\n📅 Le ${data.date} à ${data.time}\n👥 ${data.party_size} personne(s)\n📞 ${data.phone}\n📧 ${data.email}${groupNote}\n\nNous vous enverrons une confirmation par SMS. À bientôt ! 🥨`;
-        }
-      }
-    }
-
-    // ✅ Handle ROOM request
-    if (text.includes("RESERVE_ROOM:")) {
-      const jsonMatch = text.match(/RESERVE_ROOM:(\{.*?\})/s);
-      if (jsonMatch) {
-        const data = JSON.parse(jsonMatch[1]);
-        const id = createRoomRequest(data);
-        text = `Merci ${data.first_name} ! ✅ Votre demande de privatisation a bien été enregistrée.\n\n📋 **Demande #${id}**\n👤 ${data.first_name} ${data.last_name}\n📞 ${data.phone}\n📧 ${data.email}\n🎉 Événement: ${data.event_type}\n\nNotre responsable vous contactera très prochainement pour finaliser les détails. À bientôt ! 🎊`;
-      }
-    }
-
-    res.json({ text });
-
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Something went wrong." });
-  }
-});
-
-// ✅ Admin routes
-app.get("/api/reservations", (req, res) => res.json(getAllTableReservations()));
-app.get("/api/rooms", (req, res) => res.json(getAllRoomRequests()));
-
-app.listen(3001, () => console.log("✅ Proxy running on port 3001"));
