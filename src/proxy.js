@@ -5,6 +5,8 @@ import express from "express";
 import cors from "cors";
 import Groq from "groq-sdk";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 import {
   checkConflict,
   createTableReservation,
@@ -13,7 +15,8 @@ import {
   getAllRoomRequests,
 } from "./db.js";
 
-dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const app = express();
 app.use(cors());
