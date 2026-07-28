@@ -92,7 +92,7 @@ The database uses SQLite to persist data across two main tables:
 
 ---
 
-## 🛠️ Setup & Installation
+##  Setup & Installation
 
 ### Prerequisites
 * **Node.js** (v18 or higher recommended)
